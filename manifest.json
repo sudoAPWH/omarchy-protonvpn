@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "mark.protonvpn",
+  "name": "Proton VPN",
+  "version": "1.0.0",
+  "author": "mark",
+  "license": "MIT",
+  "description": "Proton VPN status, connect and disconnect, country and city picker, and settings in the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Proton VPN",
+    "description": "Connect, disconnect, pick a country or city, and change NetShield or the kill switch.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 30,
+      "recentLimit": 5
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Status poll interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      },
+      {
+        "key": "recentLimit",
+        "type": "integer",
+        "label": "Recent connections to remember",
+        "min": 0,
+        "max": 20,
+        "step": 1,
+        "defaultValue": 5
+      }
+    ]
+  }
+}

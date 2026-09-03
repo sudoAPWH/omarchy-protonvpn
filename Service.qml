@@ -1,0 +1,495 @@
+import QtQuick
+import Quickshell
+import Quickshell.Io
+import qs.Commons
+import "Model.js" as Model
+
+// Every conversation with the `protonvpn` CLI lives here so the panel stays
+// declarative. The CLI has no JSON mode and no daemon socket we can subscribe
+// to, so state is polled — but sparingly: a NetworkManager monitor supplies
+// the fast path for connects and drops that happen outside this widget, and
+// the timer is only a backstop.
+Item {
+  id: root
+
+  property var settings: ({})
+
+  // --- discovery -----------------------------------------------------------
+  property bool installed: false
+  property bool installChecked: false
+
+  // --- account -------------------------------------------------------------
+  property string accountName: ""
+  property bool accountKnown: false
+  readonly property bool signedIn: accountKnown && !Model.isSignedOutAccount(accountName)
+
+  // --- connection ----------------------------------------------------------
+  property bool connected: false
+  property string serverName: ""
+  property string serverLocation: ""
+  property int serverLoad: -1
+  property string protocol: ""
+
+  // Optimistic overlay. `protonvpn connect` can take 10-20s to return, so the
+  // UI commits to the requested state immediately and reconciles when the
+  // command exits. -1 means "just report what the CLI last told us".
+  property int desiredState: -1
+  property string pendingLabel: ""
+  readonly property bool active: desiredState === -1 ? connected : (desiredState === 1)
+  readonly property bool transitioning: desiredState !== -1
+
+  // --- catalogue -----------------------------------------------------------
+  property var countries: []
+  property var citiesByCountry: ({})
+  property string citiesPendingFor: ""
+  property var config: ({})
+  property var recents: []
+  property var favorites: []
+  property string pendingSetting: ""
+
+  // --- feedback ------------------------------------------------------------
+  property bool refreshing: false
+  property string lastError: ""
+  property string actionStatus: ""
+  property bool awaitingSignin: false
+
+  readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 30, 5, 3600)
+  readonly property int recentLimit: intSetting("recentLimit", 5, 0, 20)
+  readonly property bool busy: actionProcess.running || signoutProcess.running
+  readonly property string statePath: Quickshell.env("HOME") + "/.local/state/omarchy-protonvpn"
+
+  signal connectionChanged()
+
+  function setting(name, fallback) {
+    var value = settings ? settings[name] : undefined
+    return value === undefined || value === null ? fallback : value
+  }
+
+  function intSetting(name, fallback, min, max) {
+    var n = parseInt(String(setting(name, fallback)), 10)
+    if (!isFinite(n)) n = fallback
+    return Math.max(min, Math.min(max, n))
+  }
+
+  // ------------------------------------------------------------- reading
+
+  function refresh() {
+    if (!installChecked) {
+      whichProcess.command = ["which", "protonvpn"]
+      whichProcess.running = true
+      return
+    }
+    if (!installed) return
+
+    if (!statusProcess.running) {
+      refreshing = true
+      statusProcess.command = ["protonvpn", "status"]
+      statusProcess.running = true
+    }
+    if (!accountProcess.running) {
+      accountProcess.command = ["protonvpn", "info"]
+      accountProcess.running = true
+    }
+  }
+
+  // Catalogue and settings are only meaningful once signed in, and neither
+  // changes minute to minute — fetch them on demand (panel open) rather than
+  // on the status cadence.
+  function refreshCatalogue(force) {
+    if (!installed || !signedIn) return
+    if ((force || countries.length === 0) && !countriesProcess.running) {
+      countriesProcess.command = ["protonvpn", "countries", "list"]
+      countriesProcess.running = true
+    }
+    if ((force || Object.keys(config).length === 0) && !configProcess.running) {
+      configProcess.command = ["protonvpn", "config", "list"]
+      configProcess.running = true
+    }
+  }
+
+  function loadCities(code) {
+    var key = String(code || "").toUpperCase()
+    if (!installed || !signedIn || key === "") return
+    if (citiesByCountry[key] !== undefined || citiesProcess.running) return
+    citiesPendingFor = key
+    citiesProcess.command = ["protonvpn", "cities", "list", key]
+    citiesProcess.running = true
+  }
+
+  function applyStatus(stdout) {
+    var parsed = Model.parseStatus(stdout)
+    var was = connected
+    connected = parsed.connected
+    serverName = parsed.server
+    serverLocation = parsed.location
+    serverLoad = parsed.load
+    protocol = parsed.protocol
+    if (was !== connected) connectionChanged()
+  }
+
+  // ------------------------------------------------------------- actions
+
+  function runAction(argv, label, desired) {
+    if (!installed || actionProcess.running) return
+    lastError = ""
+    actionStatus = label
+    desiredState = desired
+    pendingLabel = label
+    actionProcess.command = ["protonvpn"].concat(argv)
+    actionProcess.running = true
+  }
+
+  function connectTo(target) {
+    if (!signedIn) return
+    var label = target && target.label ? String(target.label) : "Fastest server"
+    runAction(Model.connectArgs(target), "Connecting to " + label + "…", 1)
+    rememberTarget(target)
+  }
+
+  function disconnect() {
+    runAction(["disconnect"], "Disconnecting…", 0)
+  }
+
+  function toggleConnection() {
+    if (busy) return
+    if (active) disconnect()
+    else connectTo({ kind: "fastest", value: "", label: "Fastest server" })
+  }
+
+  function setConfigValue(key, value) {
+    if (!signedIn || actionProcess.running) return
+    // The CLI refuses kill-switch changes while a tunnel is up; say so here
+    // rather than surfacing a raw usage error.
+    if (key === "kill-switch" && connected) {
+      lastError = "Disconnect before changing the kill switch."
+      return
+    }
+    pendingSetting = key
+    runAction(["config", "set", key, value], "Setting " + key + "…", desiredState)
+  }
+
+  // `protonvpn signin` reads the password (and any 2FA token) with
+  // getpass(), so it needs a real TTY — there is no headless path. Hand the
+  // flow to a terminal and watch for it to land.
+  function signIn(username) {
+    var name = Model.trim(username)
+    if (!installed || name === "") return
+    lastError = ""
+    actionStatus = "Finish signing in from the terminal…"
+    awaitingSignin = true
+    Quickshell.execDetached([
+      "omarchy-launch-floating-terminal-with-presentation",
+      "protonvpn signin " + Util.shellQuote(name)
+    ])
+    signinWatchTimer.restart()
+    signinGiveUpTimer.restart()
+  }
+
+  function signOut() {
+    if (!installed || signoutProcess.running) return
+    lastError = ""
+    actionStatus = "Signing out…"
+    signoutProcess.command = ["protonvpn", "signout"]
+    signoutProcess.running = true
+  }
+
+  // ------------------------------------------------------------- recents
+
+  function rememberTarget(target) {
+    if (recentLimit === 0 || !target) return
+    // "Fastest" already has its own button; keeping it out of recents leaves
+    // the list for places the user actually picked.
+    if (String(target.kind) === "fastest") return
+    recents = Model.addRecent(recents, {
+      kind: String(target.kind || ""),
+      value: String(target.value || ""),
+      label: String(target.label || "")
+    }, recentLimit)
+    recentsFile.setText(JSON.stringify(recents, null, 2) + "\n")
+  }
+
+  function setRecents(list) {
+    recents = list
+    recentsFile.setText(JSON.stringify(list, null, 2) + "\n")
+  }
+
+  // ----------------------------------------------------------- favorites
+
+  function isFavorite(code) {
+    var key = String(code || "").toUpperCase()
+    for (var i = 0; i < favorites.length; i++) {
+      if (favorites[i].code === key) return true
+    }
+    return false
+  }
+
+  function toggleFavorite(code, name) {
+    var key = String(code || "").toUpperCase()
+    if (key === "") return
+    var next = []
+    var removed = false
+    for (var i = 0; i < favorites.length; i++) {
+      if (favorites[i].code === key) removed = true
+      else next.push(favorites[i])
+    }
+    // Newly starred countries go to the end so the home list keeps the order
+    // the user built it in rather than reshuffling on every change.
+    if (!removed) next.push({ code: key, name: String(name || key) })
+    favorites = next
+    favoritesFile.setText(JSON.stringify(next, null, 2) + "\n")
+  }
+
+  function flashStatus(text) {
+    actionStatus = text
+    actionStatusTimer.restart()
+  }
+
+  function reportFailure(fallback, stdout, stderr) {
+    var text = Model.trim(stderr) || Model.trim(stdout)
+    // click prints "Usage: ...\nTry '... --help'" around the real message;
+    // the Error line is the only part worth showing in a popup.
+    var rows = Model.textLines(text)
+    for (var i = 0; i < rows.length; i++) {
+      var line = Model.trim(rows[i])
+      if (line.indexOf("Error:") === 0) {
+        lastError = Model.trim(line.slice(6))
+        return
+      }
+    }
+    lastError = text !== "" ? rows[0] : fallback
+  }
+
+  // ------------------------------------------------------------- processes
+
+  Process {
+    id: whichProcess
+    running: false
+    onExited: function(exitCode) {
+      root.installChecked = true
+      root.installed = exitCode === 0
+      if (root.installed) root.refresh()
+    }
+  }
+
+  Process {
+    id: statusProcess
+    running: false
+    stdout: StdioCollector { id: statusOut; waitForEnd: true }
+    stderr: StdioCollector { id: statusErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      root.refreshing = false
+      if (exitCode === 0) {
+        root.applyStatus(statusOut.text || "")
+        // The CLI has spoken; drop the optimistic overlay.
+        root.desiredState = -1
+        root.pendingLabel = ""
+      } else {
+        root.reportFailure("Could not read VPN status", statusOut.text, statusErr.text)
+      }
+    }
+  }
+
+  Process {
+    id: accountProcess
+    running: false
+    stdout: StdioCollector { id: accountOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) return
+      var name = Model.parseAccount(accountOut.text || "")
+      var wasSignedIn = root.signedIn
+      root.accountName = name
+      root.accountKnown = true
+      if (root.signedIn && !wasSignedIn) {
+        // Sign-in just landed (possibly from the terminal we launched).
+        root.awaitingSignin = false
+        signinWatchTimer.stop()
+        signinGiveUpTimer.stop()
+        root.flashStatus("Signed in as " + name)
+        root.refreshCatalogue(true)
+      } else if (!root.signedIn && wasSignedIn) {
+        root.countries = []
+        root.citiesByCountry = ({})
+        root.config = ({})
+      }
+    }
+  }
+
+  Process {
+    id: countriesProcess
+    running: false
+    stdout: StdioCollector { id: countriesOut; waitForEnd: true }
+    stderr: StdioCollector { id: countriesErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var text = countriesOut.text || ""
+      if (exitCode === 0) {
+        root.countries = Model.parseCountries(text)
+        return
+      }
+      if (!Model.isAuthError(text + countriesErr.text)) {
+        root.reportFailure("Could not load the country list", text, countriesErr.text)
+      }
+    }
+  }
+
+  Process {
+    id: citiesProcess
+    running: false
+    stdout: StdioCollector { id: citiesOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var code = root.citiesPendingFor
+      root.citiesPendingFor = ""
+      if (code === "") return
+      var next = {}
+      for (var key in root.citiesByCountry) next[key] = root.citiesByCountry[key]
+      next[code] = exitCode === 0 ? Model.parseCities(citiesOut.text || "") : []
+      root.citiesByCountry = next
+    }
+  }
+
+  Process {
+    id: configProcess
+    running: false
+    stdout: StdioCollector { id: configOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.config = Model.parseConfig(configOut.text || "")
+    }
+  }
+
+  Process {
+    id: actionProcess
+    running: false
+    stdout: StdioCollector { id: actionOut; waitForEnd: true }
+    stderr: StdioCollector { id: actionErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      var settingKey = root.pendingSetting
+      root.pendingSetting = ""
+      if (exitCode === 0) {
+        root.flashStatus(Model.trim(Model.textLines(actionOut.text || "")[0]))
+      } else {
+        root.reportFailure("Command failed", actionOut.text, actionErr.text)
+        root.actionStatus = ""
+        // The optimistic state was a guess and the guess was wrong.
+        root.desiredState = -1
+        root.pendingLabel = ""
+      }
+      if (settingKey !== "") root.refreshCatalogue(true)
+      root.refresh()
+    }
+  }
+
+  Process {
+    id: signoutProcess
+    running: false
+    stdout: StdioCollector { id: signoutOut; waitForEnd: true }
+    stderr: StdioCollector { id: signoutErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode === 0) {
+        root.accountName = "None"
+        root.countries = []
+        root.citiesByCountry = ({})
+        root.config = ({})
+        root.flashStatus("Signed out")
+      } else {
+        root.reportFailure("Sign out failed", signoutOut.text, signoutErr.text)
+      }
+      root.refresh()
+    }
+  }
+
+  // NetworkManager is what the CLI drives, so its event stream is the cheapest
+  // way to notice a tunnel coming up or dropping — including connects made
+  // from another terminal, or a drop we did not ask for. Purely an accelerant:
+  // if nmcli is missing the poll timer still carries the widget.
+  Process {
+    id: networkMonitor
+    running: true
+    command: ["nmcli", "monitor"]
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (Model.trim(line) === "") return
+        networkSettleTimer.restart()
+      }
+    }
+    onExited: networkMonitorRestart.restart()
+  }
+
+  Timer {
+    id: networkMonitorRestart
+    interval: 5000
+    onTriggered: networkMonitor.running = true
+  }
+
+  // nmcli emits a burst of lines per transition; wait for it to settle so one
+  // connect costs one status read.
+  Timer {
+    id: networkSettleTimer
+    interval: 1200
+    onTriggered: if (root.installed && !actionProcess.running) root.refresh()
+  }
+
+  Timer {
+    id: refreshTimer
+    interval: root.refreshIntervalSec * 1000
+    repeat: true
+    running: root.installed
+    onTriggered: if (!actionProcess.running) root.refresh()
+  }
+
+  Timer {
+    id: actionStatusTimer
+    interval: 4000
+    onTriggered: root.actionStatus = ""
+  }
+
+  // Poll for the terminal sign-in landing so the panel updates itself the
+  // moment the user finishes, without them having to click anything.
+  Timer {
+    id: signinWatchTimer
+    interval: 2000
+    repeat: true
+    onTriggered: if (!accountProcess.running) {
+      accountProcess.command = ["protonvpn", "info"]
+      accountProcess.running = true
+    }
+  }
+
+  Timer {
+    id: signinGiveUpTimer
+    interval: 180000
+    onTriggered: {
+      signinWatchTimer.stop()
+      root.awaitingSignin = false
+      root.actionStatus = ""
+    }
+  }
+
+  FileView {
+    id: recentsFile
+    path: root.statePath + "/recents.json"
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.recents = Model.normalizeRecents(text(), root.recentLimit)
+    onLoadFailed: root.recents = []
+    onFileChanged: reload()
+  }
+
+  FileView {
+    id: favoritesFile
+    path: root.statePath + "/favorites.json"
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onLoaded: root.favorites = Model.normalizeFavorites(text())
+    onLoadFailed: root.favorites = []
+    onFileChanged: reload()
+  }
+
+  Process {
+    id: stateDirProcess
+    running: true
+    command: ["mkdir", "-p", root.statePath]
+  }
+
+  Component.onCompleted: root.refresh()
+}
