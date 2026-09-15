@@ -83,11 +83,11 @@ Item {
 
     if (!statusProcess.running) {
       refreshing = true
-      statusProcess.command = ["protonvpn", "status"]
+      statusProcess.command = Model.cliCommand(["status"])
       statusProcess.running = true
     }
     if (!accountProcess.running) {
-      accountProcess.command = ["protonvpn", "info"]
+      accountProcess.command = Model.cliCommand(["info"])
       accountProcess.running = true
     }
   }
@@ -98,11 +98,11 @@ Item {
   function refreshCatalogue(force) {
     if (!installed || !signedIn) return
     if ((force || countries.length === 0) && !countriesProcess.running) {
-      countriesProcess.command = ["protonvpn", "countries", "list"]
+      countriesProcess.command = Model.cliCommand(["countries", "list"])
       countriesProcess.running = true
     }
     if ((force || Object.keys(config).length === 0) && !configProcess.running) {
-      configProcess.command = ["protonvpn", "config", "list"]
+      configProcess.command = Model.cliCommand(["config", "list"])
       configProcess.running = true
     }
   }
@@ -112,7 +112,7 @@ Item {
     if (!installed || !signedIn || key === "") return
     if (citiesByCountry[key] !== undefined || citiesProcess.running) return
     citiesPendingFor = key
-    citiesProcess.command = ["protonvpn", "cities", "list", key]
+    citiesProcess.command = Model.cliCommand(["cities", "list", key])
     citiesProcess.running = true
   }
 
@@ -135,7 +135,7 @@ Item {
     actionStatus = label
     desiredState = desired
     pendingLabel = label
-    actionProcess.command = ["protonvpn"].concat(argv)
+    actionProcess.command = Model.cliCommand(argv)
     actionProcess.running = true
   }
 
@@ -179,7 +179,7 @@ Item {
     awaitingSignin = true
     Quickshell.execDetached([
       "omarchy-launch-floating-terminal-with-presentation",
-      "protonvpn signin " + Util.shellQuote(name)
+      Model.cliShell("signin " + Util.shellQuote(name))
     ])
     signinWatchTimer.restart()
     signinGiveUpTimer.restart()
@@ -189,7 +189,7 @@ Item {
     if (!installed || signoutProcess.running) return
     lastError = ""
     actionStatus = "Signing out…"
-    signoutProcess.command = ["protonvpn", "signout"]
+    signoutProcess.command = Model.cliCommand(["signout"])
     signoutProcess.running = true
   }
 
@@ -448,7 +448,7 @@ Item {
     interval: 2000
     repeat: true
     onTriggered: if (!accountProcess.running) {
-      accountProcess.command = ["protonvpn", "info"]
+      accountProcess.command = Model.cliCommand(["info"])
       accountProcess.running = true
     }
   }

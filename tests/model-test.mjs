@@ -21,7 +21,7 @@ const Model = await import("data:text/javascript;base64," + Buffer.from(
     "parseCities", "parseConfig", "netshieldLabel", "nextNetshield",
     "settingIsOn", "settingIsLocked", "countryFlag", "loadLabel",
     "protocolLabel", "matchesQuery", "addRecent", "normalizeRecents",
-    "normalizeFavorites", "connectArgs"
+    "normalizeFavorites", "connectArgs", "cliCommand", "cliShell"
   ].join(", ") + "}"
 ).toString("base64"))
 
@@ -144,6 +144,14 @@ eq(Model.connectArgs({ kind: "server", value: "IT#23" }), ["connect", "IT#23"], 
 eq(Model.connectArgs({ kind: "securecore" }), ["connect", "--securecore"], "connect secure core")
 eq(Model.connectArgs({ kind: "fastest" }), ["connect"], "connect fastest")
 eq(Model.connectArgs(null), ["connect"], "no target falls back to fastest")
+
+// -------------------------------------------------------------- cli command
+
+eq(Model.cliCommand(["status"]), ["env", "PROTON_LOADER_OVERRIDES=keyring=json", "protonvpn", "status"],
+   "cli calls force the JSON keyring backend")
+eq(Model.cliCommand(), ["env", "PROTON_LOADER_OVERRIDES=keyring=json", "protonvpn"], "cli with no args")
+eq(Model.cliShell("signin 'me'"), "PROTON_LOADER_OVERRIDES=keyring=json protonvpn signin 'me'",
+   "sign-in terminal forces the JSON keyring backend too")
 
 // ----------------------------------------------------------------- recents
 

@@ -61,7 +61,34 @@ The panel takes keyboard focus when it opens.
 it needs a real terminal — there is no headless path. Type your username in the
 panel and press enter: the widget opens an Omarchy terminal running the sign-in,
 then notices when it lands and refreshes itself. Nothing is stored by this
-widget; credentials live wherever the Proton CLI keeps them.
+widget; the session is kept by the Proton CLI itself — see below.
+
+## Keyring
+
+The widget runs every `protonvpn` command with
+`PROTON_LOADER_OVERRIDES=keyring=json`, so Proton keeps its session in JSON
+files under `~/.config/Proton/` (mode 700) instead of gnome-keyring.
+
+This is deliberate. Proton's session contains PEM keys with literal newlines,
+and Omarchy's default keyring has no password, which gnome-keyring stores as a
+plaintext `.keyring` file. The newlines break that file's format, so on the
+next login the daemon can't read it and shows
+**"Choose password for new keyring"** — and every other secret in that keyring
+(browser Safe Storage keys, tokens) goes with it. Each time you answer the
+prompt another `Default_N.keyring` appears, until Proton writes again and the
+cycle repeats.
+
+The JSON files are no less protected than a passwordless keyring (both are
+plaintext readable by your user), so on an encrypted disk nothing is lost.
+
+If you also use `protonvpn` from a terminal, export the same variable so the
+terminal and the widget share one session — for example in Hyprland:
+
+```lua
+hl.env("PROTON_LOADER_OVERRIDES", "keyring=json")
+```
+
+Coming from a build that used gnome-keyring, you'll need to sign in once more.
 
 ## Install
 

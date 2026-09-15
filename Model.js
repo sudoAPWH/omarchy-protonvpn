@@ -300,6 +300,27 @@ function normalizeFavorites(raw) {
   return out
 }
 
+// Proton's session is a JSON blob holding PEM keys with real newlines. In a
+// passwordless gnome-keyring (Omarchy's default) those newlines are written
+// straight into the plaintext .keyring file and corrupt it: on next login the
+// daemon cannot parse the file, pops "Choose password for new keyring", and
+// every other app's secrets in that keyring are lost with it. Proton ships a
+// JSON-file keyring backend for exactly this situation — force it, so the
+// session lives in ~/.config/Proton (mode 700) and gnome-keyring is never used.
+var CLI_ENV = "PROTON_LOADER_OVERRIDES=keyring=json"
+
+// The argv to run the protonvpn CLI. Every invocation goes through here so no
+// call can slip back onto gnome-keyring and see a different (signed-out) session.
+function cliCommand(argv) {
+  return ["env", CLI_ENV, "protonvpn"].concat(argv || [])
+}
+
+// The same, as a shell string for the sign-in terminal. Args must already be
+// shell-quoted by the caller.
+function cliShell(quotedArgs) {
+  return CLI_ENV + " protonvpn " + quotedArgs
+}
+
 // The argv for one connection target. Kept here so the panel, the recents
 // list, and IPC all build the exact same command.
 function connectArgs(target) {
