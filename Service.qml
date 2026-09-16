@@ -45,6 +45,13 @@ Item {
   // command exits. -1 means "just report what the CLI last told us".
   property int desiredState: -1
   property string pendingLabel: ""
+
+  // A status read that was already in flight when you flipped the switch is
+  // reporting the world as it was before, so it must not be allowed to end the
+  // optimistic overlay: that is what made the toggle snap back and forth. Only
+  // a read that started after the command finished can settle it.
+  property double actionEndedAt: 0
+  property double statusStartedAt: 0
   readonly property bool active: desiredState === -1 ? connected : (desiredState === 1)
   readonly property bool transitioning: desiredState !== -1
 
@@ -95,6 +102,7 @@ Item {
 
     if (!statusProcess.running) {
       refreshing = true
+      statusStartedAt = Date.now()
       statusProcess.command = Model.cliCommand(root.cliPath, ["status"])
       statusProcess.running = true
     }
@@ -295,9 +303,11 @@ Item {
       root.refreshing = false
       if (exitCode === 0) {
         root.applyStatus(statusOut.text || "")
-        // The CLI has spoken; drop the optimistic overlay.
-        root.desiredState = -1
-        root.pendingLabel = ""
+        // The CLI has spoken, but only about a moment after the command ran.
+        if (!actionProcess.running && root.statusStartedAt > root.actionEndedAt) {
+          root.desiredState = -1
+          root.pendingLabel = ""
+        }
       } else {
         root.reportFailure("Could not read VPN status", statusOut.text, statusErr.text)
       }
@@ -383,6 +393,7 @@ Item {
     onExited: function(exitCode) {
       var settingKey = root.pendingSetting
       root.pendingSetting = ""
+      root.actionEndedAt = Date.now()
       if (exitCode === 0) {
         root.flashStatus(Model.trim(Model.textLines(actionOut.text || "")[0]))
       } else {
