@@ -26,6 +26,11 @@ Panel {
   // cursor survive all of that, and let the layout stay plain nested Columns.
   property string cursorId: ""
   property bool cursorActive: false
+
+  // Whether the highlight is following the mouse or the keyboard. A pointer
+  // leaving the panel should take its highlight with it; a keyboard cursor
+  // should stay exactly where it is.
+  property bool cursorFromMouse: false
   property string query: ""
   property string expandedCountry: ""
   property var rowItems: ({})
@@ -104,11 +109,23 @@ Panel {
     if (id && rowItems[id] === item) delete rowItems[id]
   }
 
-  function setCursor(id) {
+  function setCursor(id, fromMouse) {
     if (!id) return
+    hoverRelease.stop()
+    root.cursorFromMouse = !!fromMouse
     root.cursorActive = true
     root.cursorId = id
     scrollCursorIntoView()
+  }
+
+  // Leaving one row and entering the next fires both an exit and an enter, in
+  // no guaranteed order, so the exit only arms this. Entering any row stops it
+  // again, which leaves it to fire just once: when the pointer has actually
+  // left the rows behind.
+  Timer {
+    id: hoverRelease
+    interval: 60
+    onTriggered: if (root.cursorFromMouse) root.cursorActive = false
   }
 
   function moveCursor(dx, dy) {
@@ -911,7 +928,8 @@ Panel {
       hoverEnabled: true
       enabled: glyphRow.enabled
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.setCursor(glyphRow.rowId)
+      onEntered: root.setCursor(glyphRow.rowId, true)
+      onExited: if (root.cursorFromMouse) hoverRelease.restart()
       onClicked: glyphRow.activated()
     }
 
@@ -1001,7 +1019,8 @@ Panel {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: Qt.PointingHandCursor
-      onEntered: root.setCursor(countryRow.rowId)
+      onEntered: root.setCursor(countryRow.rowId, true)
+      onExited: if (root.cursorFromMouse) hoverRelease.restart()
       onClicked: countryRow.activated()
     }
 
