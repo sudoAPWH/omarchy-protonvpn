@@ -143,11 +143,14 @@ Item {
 
   function runAction(argv, label, desired) {
     if (!installed || actionProcess.running) return
+    // A command that cannot start never reports an exit, so without this the
+    // optimistic label would sit there forever.
+    actionWatchdog.restart()
     lastError = ""
     actionStatus = label
     desiredState = desired
     pendingLabel = label
-    actionProcess.command = Model.cliCommand(argv)
+    actionProcess.command = Model.cliCommand(cliPath, argv)
     actionProcess.running = true
   }
 
@@ -390,6 +393,24 @@ Item {
         root.pendingLabel = ""
       }
       if (settingKey !== "") root.refreshCatalogue(true)
+      root.refresh()
+      actionWatchdog.stop()
+    }
+  }
+
+  // `protonvpn connect` can genuinely take 10-20s, so this is long enough not
+  // to cut a slow connect short, and short enough that a command which never
+  // ran clears instead of leaving the panel mid-sentence.
+  Timer {
+    id: actionWatchdog
+    interval: 90000
+    onTriggered: {
+      if (actionProcess.running) return
+      root.desiredState = -1
+      root.pendingLabel = ""
+      root.actionStatus = ""
+      root.pendingSetting = ""
+      root.lastError = "That command did not run."
       root.refresh()
     }
   }
