@@ -527,7 +527,7 @@ Panel {
             textFormat: Text.PlainText
             visible: vpn.installChecked && !vpn.installed
             width: parent.width
-            text: "The protonvpn CLI is not on PATH.\nInstall it with: omarchy pkg add proton-vpn-cli"
+            text: "Proton VPN's CLI was not found.\nInstall it with: omarchy pkg add proton-vpn-cli"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
