@@ -279,6 +279,25 @@ function normalizeRecents(raw, limit) {
   return out
 }
 
+// Far past any real list of starred countries; a file holding more than this
+// is not one this wrote.
+var MAX_FAVORITES = 64
+
+// Whether a state file can be trusted to be what it claims. An unreadable file
+// must not read as "empty", or the next star writes over whatever was in it.
+function stateProblem(raw) {
+  var text = String(raw || "")
+  if (text.length > 1048576) return "oversize"
+  if (text.replace(/^\s+|\s+$/g, "") === "") return ""
+  var parsed
+  try {
+    parsed = JSON.parse(text)
+  } catch (e) {
+    return "corrupt"
+  }
+  return Array.isArray(parsed) ? "" : "foreign"
+}
+
 function normalizeFavorites(raw) {
   var parsed = []
   try {
@@ -289,7 +308,7 @@ function normalizeFavorites(raw) {
   if (!Array.isArray(parsed)) return []
   var out = []
   var seen = {}
-  for (var i = 0; i < parsed.length; i++) {
+  for (var i = 0; i < parsed.length && out.length < MAX_FAVORITES; i++) {
     var entry = parsed[i]
     if (!entry || typeof entry !== "object") continue
     var code = trim(entry.code).toUpperCase()
@@ -309,16 +328,21 @@ function normalizeFavorites(raw) {
 // session lives in ~/.config/Proton (mode 700) and gnome-keyring is never used.
 var CLI_ENV = "PROTON_LOADER_OVERRIDES=keyring=json"
 
-// The argv to run the protonvpn CLI. Every invocation goes through here so no
-// call can slip back onto gnome-keyring and see a different (signed-out) session.
-function cliCommand(argv) {
-  return ["env", CLI_ENV, "protonvpn"].concat(argv || [])
+// The same override as a map, set on each Process rather than wrapped around
+// the command with env(1): one less program to find, and nothing to quote.
+var CLI_ENVIRONMENT = ({ "PROTON_LOADER_OVERRIDES": "keyring=json" })
+
+// The argv to run the protonvpn CLI, given the path state-helper.py resolved.
+// Every invocation goes through here so no call can slip back onto
+// gnome-keyring and see a different (signed-out) session.
+function cliCommand(cliPath, argv) {
+  return [String(cliPath || "")].concat(argv || [])
 }
 
-// The same, as a shell string for the sign-in terminal. Args must already be
-// shell-quoted by the caller.
-function cliShell(quotedArgs) {
-  return CLI_ENV + " protonvpn " + quotedArgs
+// The same, as a shell string for the sign-in terminal, which needs a TTY.
+// Args must already be shell-quoted by the caller; the path is quoted here.
+function cliShell(cliPath, quotedArgs) {
+  return CLI_ENV + " '" + String(cliPath || "").replace(/'/g, "'\\''") + "' " + quotedArgs
 }
 
 // The argv for one connection target. Kept here so the panel, the recents

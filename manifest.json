@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "mark.protonvpn",
+  "id": "omarchy-protonvpn",
   "name": "Proton VPN",
   "version": "1.0.1",
-  "author": "mark",
+  "author": "Alexander Hutlet",
   "license": "MIT",
   "description": "Proton VPN status, connect and disconnect, country and city picker, and settings in the Omarchy bar.",
   "kinds": [

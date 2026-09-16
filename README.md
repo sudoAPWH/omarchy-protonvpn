@@ -92,17 +92,44 @@ Coming from a build that used gnome-keyring, you'll need to sign in once more.
 
 ## Install
 
-Requires `quickshell` (Omarchy's shell), `proton-vpn-cli`, and — optionally —
-`nmcli` for instant status updates.
+Proton VPN's own CLI does the work here, so install that first. It is in Arch's
+`extra` repository:
 
 ```bash
-git clone <this repo> ~/Projects/omarchy-protonvpn
-ln -sfn ~/Projects/omarchy-protonvpn ~/.config/omarchy/plugins/mark.protonvpn
-omarchy-shell shell rescanPlugins
-omarchy plugin enable mark.protonvpn
+omarchy pkg add proton-vpn-cli
 ```
 
-Move it in the bar with `omarchy bar move mark.protonvpn --section right`.
+Then add the widget:
+
+```bash
+omarchy plugin add https://github.com/sudoAPWH/omarchy-protonvpn.git --enable
+```
+
+By hand instead:
+
+```bash
+git clone https://github.com/sudoAPWH/omarchy-protonvpn.git \
+  ~/.config/omarchy/plugins/omarchy-protonvpn
+omarchy-shell shell rescanPlugins
+omarchy plugin enable omarchy-protonvpn
+```
+
+The directory name must match the `id` in `manifest.json`. Move it in the bar
+with `omarchy bar move omarchy-protonvpn --section right`.
+
+`nmcli` (NetworkManager) is optional, and only makes status updates instant.
+Without it the widget polls instead.
+
+## Removing it
+
+```bash
+omarchy plugin remove omarchy-protonvpn --yes
+```
+
+To take it off the bar but keep it installed, `omarchy plugin disable
+omarchy-protonvpn` instead. Starred countries and recent connections live in
+`~/.local/state/omarchy-protonvpn/`; delete that folder to clear them. Signing
+out of Proton is separate: use the panel's sign out, or `protonvpn signout`.
 
 ## Settings
 
@@ -114,19 +141,19 @@ Set on the widget's entry in `~/.config/omarchy/shell.json`:
 | `recentLimit` | 5 | how many recent connections to keep (0 disables) |
 
 ```json
-{ "id": "mark.protonvpn", "refreshIntervalSec": 60, "recentLimit": 8 }
+{ "id": "omarchy-protonvpn", "refreshIntervalSec": 60, "recentLimit": 8 }
 ```
 
 ## IPC
 
 ```bash
-omarchy-shell mark.protonvpn toggle              # show/hide the panel
-omarchy-shell mark.protonvpn status              # connected CA#954 Vancouver, Canada
-omarchy-shell mark.protonvpn connect             # fastest server
-omarchy-shell mark.protonvpn connect US          # fastest in a country
-omarchy-shell mark.protonvpn connect 'IT#23'     # a named server
-omarchy-shell mark.protonvpn disconnect
-omarchy-shell mark.protonvpn refresh
+omarchy-shell omarchy-protonvpn toggle              # show/hide the panel
+omarchy-shell omarchy-protonvpn status              # connected CA#954 Vancouver, Canada
+omarchy-shell omarchy-protonvpn connect             # fastest server
+omarchy-shell omarchy-protonvpn connect US          # fastest in a country
+omarchy-shell omarchy-protonvpn connect 'IT#23'     # a named server
+omarchy-shell omarchy-protonvpn disconnect
+omarchy-shell omarchy-protonvpn refresh
 ```
 
 ## How it stays current

@@ -15,8 +15,18 @@ Item {
   property var settings: ({})
 
   // --- discovery -----------------------------------------------------------
-  property bool installed: false
+  // The absolute path state-helper.py found for the CLI. Everything that runs
+  // it uses this, so no call is ever resolved through $PATH.
+  property string cliPath: ""
+  readonly property bool installed: cliPath !== ""
   property bool installChecked: false
+
+  readonly property string helperPath:
+    decodeURIComponent(String(Qt.resolvedUrl("state-helper.py")).replace(/^file:\/\//, ""))
+
+  function helperCommand(mode, argument) {
+    return ["/usr/bin/python3", "-I", "-S", helperPath, mode, argument]
+  }
 
   // --- account -------------------------------------------------------------
   property string accountName: ""
@@ -75,19 +85,21 @@ Item {
 
   function refresh() {
     if (!installChecked) {
-      whichProcess.command = ["which", "protonvpn"]
-      whichProcess.running = true
+      if (!resolveProcess.running) {
+        resolveProcess.command = helperCommand("resolve", "protonvpn")
+        resolveProcess.running = true
+      }
       return
     }
     if (!installed) return
 
     if (!statusProcess.running) {
       refreshing = true
-      statusProcess.command = Model.cliCommand(["status"])
+      statusProcess.command = Model.cliCommand(root.cliPath, ["status"])
       statusProcess.running = true
     }
     if (!accountProcess.running) {
-      accountProcess.command = Model.cliCommand(["info"])
+      accountProcess.command = Model.cliCommand(root.cliPath, ["info"])
       accountProcess.running = true
     }
   }
@@ -98,11 +110,11 @@ Item {
   function refreshCatalogue(force) {
     if (!installed || !signedIn) return
     if ((force || countries.length === 0) && !countriesProcess.running) {
-      countriesProcess.command = Model.cliCommand(["countries", "list"])
+      countriesProcess.command = Model.cliCommand(root.cliPath, ["countries", "list"])
       countriesProcess.running = true
     }
     if ((force || Object.keys(config).length === 0) && !configProcess.running) {
-      configProcess.command = Model.cliCommand(["config", "list"])
+      configProcess.command = Model.cliCommand(root.cliPath, ["config", "list"])
       configProcess.running = true
     }
   }
@@ -112,7 +124,7 @@ Item {
     if (!installed || !signedIn || key === "") return
     if (citiesByCountry[key] !== undefined || citiesProcess.running) return
     citiesPendingFor = key
-    citiesProcess.command = Model.cliCommand(["cities", "list", key])
+    citiesProcess.command = Model.cliCommand(root.cliPath, ["cities", "list", key])
     citiesProcess.running = true
   }
 
@@ -178,8 +190,8 @@ Item {
     actionStatus = "Finish signing in from the terminal…"
     awaitingSignin = true
     Quickshell.execDetached([
-      "omarchy-launch-floating-terminal-with-presentation",
-      Model.cliShell("signin " + Util.shellQuote(name))
+      "/usr/bin/omarchy-launch-floating-terminal-with-presentation",
+      Model.cliShell(cliPath, "signin " + Util.shellQuote(name))
     ])
     signinWatchTimer.restart()
     signinGiveUpTimer.restart()
@@ -189,7 +201,7 @@ Item {
     if (!installed || signoutProcess.running) return
     lastError = ""
     actionStatus = "Signing out…"
-    signoutProcess.command = Model.cliCommand(["signout"])
+    signoutProcess.command = Model.cliCommand(root.cliPath, ["signout"])
     signoutProcess.running = true
   }
 
@@ -205,12 +217,11 @@ Item {
       value: String(target.value || ""),
       label: String(target.label || "")
     }, recentLimit)
-    recentsFile.setText(JSON.stringify(recents, null, 2) + "\n")
+    writeRecents(recents)
   }
 
   function setRecents(list) {
-    recents = list
-    recentsFile.setText(JSON.stringify(list, null, 2) + "\n")
+    writeRecents(list)
   }
 
   // ----------------------------------------------------------- favorites
@@ -235,8 +246,7 @@ Item {
     // Newly starred countries go to the end so the home list keeps the order
     // the user built it in rather than reshuffling on every change.
     if (!removed) next.push({ code: key, name: String(name || key) })
-    favorites = next
-    favoritesFile.setText(JSON.stringify(next, null, 2) + "\n")
+    writeFavorites(next)
   }
 
   function flashStatus(text) {
@@ -262,11 +272,12 @@ Item {
   // ------------------------------------------------------------- processes
 
   Process {
-    id: whichProcess
+    id: resolveProcess
     running: false
+    stdout: StdioCollector { id: resolveOut; waitForEnd: true }
     onExited: function(exitCode) {
       root.installChecked = true
-      root.installed = exitCode === 0
+      root.cliPath = exitCode === 0 ? Model.trim(resolveOut.text) : ""
       if (root.installed) root.refresh()
     }
   }
@@ -274,6 +285,7 @@ Item {
   Process {
     id: statusProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: statusOut; waitForEnd: true }
     stderr: StdioCollector { id: statusErr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -292,6 +304,7 @@ Item {
   Process {
     id: accountProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: accountOut; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode !== 0) return
@@ -317,6 +330,7 @@ Item {
   Process {
     id: countriesProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: countriesOut; waitForEnd: true }
     stderr: StdioCollector { id: countriesErr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -334,6 +348,7 @@ Item {
   Process {
     id: citiesProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: citiesOut; waitForEnd: true }
     onExited: function(exitCode) {
       var code = root.citiesPendingFor
@@ -349,6 +364,7 @@ Item {
   Process {
     id: configProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: configOut; waitForEnd: true }
     onExited: function(exitCode) {
       if (exitCode === 0) root.config = Model.parseConfig(configOut.text || "")
@@ -358,6 +374,7 @@ Item {
   Process {
     id: actionProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: actionOut; waitForEnd: true }
     stderr: StdioCollector { id: actionErr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -380,6 +397,7 @@ Item {
   Process {
     id: signoutProcess
     running: false
+    environment: Model.CLI_ENVIRONMENT
     stdout: StdioCollector { id: signoutOut; waitForEnd: true }
     stderr: StdioCollector { id: signoutErr; waitForEnd: true }
     onExited: function(exitCode) {
@@ -403,7 +421,7 @@ Item {
   Process {
     id: networkMonitor
     running: true
-    command: ["nmcli", "monitor"]
+    command: ["/usr/bin/nmcli", "monitor"]
     stdout: SplitParser {
       onRead: function(line) {
         if (Model.trim(line) === "") return
@@ -448,7 +466,7 @@ Item {
     interval: 2000
     repeat: true
     onTriggered: if (!accountProcess.running) {
-      accountProcess.command = Model.cliCommand(["info"])
+      accountProcess.command = Model.cliCommand(root.cliPath, ["info"])
       accountProcess.running = true
     }
   }
@@ -463,33 +481,126 @@ Item {
     }
   }
 
-  FileView {
-    id: recentsFile
-    path: root.statePath + "/recents.json"
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: root.recents = Model.normalizeRecents(text(), root.recentLimit)
-    onLoadFailed: root.recents = []
-    onFileChanged: reload()
+  // ------------------------------------------------------- state on disk
+  //
+  // Starred countries and recent connections are read and written through
+  // state-helper.py rather than opened here. It walks the folders with
+  // O_NOFOLLOW, checks each descriptor it opens, and replaces the file through
+  // a same-directory temporary, so a path swapped underneath is refused instead
+  // of followed. It also creates the folder, which is why there is no mkdir.
+  //
+  // A file that cannot be read, or that holds something this did not write, is
+  // left alone: writing over it would turn an unreadable file into a lost one.
+  property bool recentsLocked: false
+  property bool favoritesLocked: false
+  property string recentsPayload: ""
+  property string favoritesPayload: ""
+
+  readonly property string recentsPath: statePath + "/recents.json"
+  readonly property string favoritesPath: statePath + "/favorites.json"
+
+  function loadState() {
+    if (!recentsReader.running) {
+      recentsReader.command = helperCommand("read", recentsPath)
+      recentsReader.running = true
+    }
+    if (!favoritesReader.running) {
+      favoritesReader.command = helperCommand("read", favoritesPath)
+      favoritesReader.running = true
+    }
   }
 
-  FileView {
-    id: favoritesFile
-    path: root.statePath + "/favorites.json"
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: root.favorites = Model.normalizeFavorites(text())
-    onLoadFailed: root.favorites = []
-    onFileChanged: reload()
+  function writeRecents(list) {
+    recents = list
+    if (recentsLocked || recentsWriter.running) return
+    recentsPayload = JSON.stringify(list, null, 2) + "\n"
+    recentsWriter.command = helperCommand("write", recentsPath)
+    recentsWriter.running = true
+  }
+
+  function writeFavorites(list) {
+    favorites = list
+    if (favoritesLocked || favoritesWriter.running) return
+    favoritesPayload = JSON.stringify(list, null, 2) + "\n"
+    favoritesWriter.command = helperCommand("write", favoritesPath)
+    favoritesWriter.running = true
+  }
+
+  // 15 is "no file yet", which is simply an empty list on first run.
+  function readState(exitCode, text, path) {
+    if (exitCode === 15) return { list: [], locked: false }
+    if (exitCode !== 0) {
+      console.warn("omarchy-protonvpn: cannot read " + path + " (" + exitCode + ")")
+      return { list: null, locked: true }
+    }
+    var problem = Model.stateProblem(text)
+    if (problem !== "") {
+      console.warn("omarchy-protonvpn: " + path + " is " + problem + ", leaving it alone")
+      return { list: null, locked: true }
+    }
+    return { list: text, locked: false }
   }
 
   Process {
-    id: stateDirProcess
-    running: true
-    command: ["mkdir", "-p", root.statePath]
+    id: recentsReader
+    running: false
+    stdout: StdioCollector { id: recentsOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var result = root.readState(exitCode, recentsOut.text, root.recentsPath)
+      root.recentsLocked = result.locked
+      if (result.list !== null)
+        root.recents = Model.normalizeRecents(result.list === "" ? "[]" : result.list, root.recentLimit)
+    }
   }
 
-  Component.onCompleted: root.refresh()
+  Process {
+    id: favoritesReader
+    running: false
+    stdout: StdioCollector { id: favoritesOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var result = root.readState(exitCode, favoritesOut.text, root.favoritesPath)
+      root.favoritesLocked = result.locked
+      if (result.list !== null)
+        root.favorites = Model.normalizeFavorites(result.list === "" ? "[]" : result.list)
+    }
+  }
+
+  Process {
+    id: recentsWriter
+    running: false
+    stdinEnabled: true
+    onStarted: {
+      write(root.recentsPayload)
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      stdinEnabled = true
+      if (exitCode !== 0) {
+        root.recentsLocked = true
+        console.warn("omarchy-protonvpn: cannot write " + root.recentsPath + " (" + exitCode + ")")
+      }
+    }
+  }
+
+  Process {
+    id: favoritesWriter
+    running: false
+    stdinEnabled: true
+    onStarted: {
+      write(root.favoritesPayload)
+      stdinEnabled = false
+    }
+    onExited: function(exitCode) {
+      stdinEnabled = true
+      if (exitCode !== 0) {
+        root.favoritesLocked = true
+        console.warn("omarchy-protonvpn: cannot write " + root.favoritesPath + " (" + exitCode + ")")
+      }
+    }
+  }
+
+  Component.onCompleted: {
+    root.loadState()
+    root.refresh()
+  }
 }

@@ -9,8 +9,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "mark.protonvpn"
-  ipcTarget: "mark.protonvpn"
+  moduleName: "omarchy-protonvpn"
+  ipcTarget: "omarchy-protonvpn"
   manageIpc: false
 
   // Two views share one card. Home is the everyday surface — connect, the

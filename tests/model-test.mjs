@@ -21,7 +21,8 @@ const Model = await import("data:text/javascript;base64," + Buffer.from(
     "parseCities", "parseConfig", "netshieldLabel", "nextNetshield",
     "settingIsOn", "settingIsLocked", "countryFlag", "loadLabel",
     "protocolLabel", "matchesQuery", "addRecent", "normalizeRecents",
-    "normalizeFavorites", "connectArgs", "cliCommand", "cliShell"
+    "normalizeFavorites", "connectArgs", "cliCommand", "cliShell",
+    "stateProblem", "CLI_ENVIRONMENT", "MAX_FAVORITES"
   ].join(", ") + "}"
 ).toString("base64"))
 
@@ -147,11 +148,33 @@ eq(Model.connectArgs(null), ["connect"], "no target falls back to fastest")
 
 // -------------------------------------------------------------- cli command
 
-eq(Model.cliCommand(["status"]), ["env", "PROTON_LOADER_OVERRIDES=keyring=json", "protonvpn", "status"],
-   "cli calls force the JSON keyring backend")
-eq(Model.cliCommand(), ["env", "PROTON_LOADER_OVERRIDES=keyring=json", "protonvpn"], "cli with no args")
-eq(Model.cliShell("signin 'me'"), "PROTON_LOADER_OVERRIDES=keyring=json protonvpn signin 'me'",
+eq(Model.cliCommand("/usr/bin/protonvpn", ["status"]), ["/usr/bin/protonvpn", "status"],
+   "cli runs the resolved path, with no env(1) wrapper and nothing from $PATH")
+eq(Model.cliCommand("/usr/bin/protonvpn"), ["/usr/bin/protonvpn"], "cli with no args")
+eq(Model.CLI_ENVIRONMENT, { PROTON_LOADER_OVERRIDES: "keyring=json" },
+   "the JSON keyring backend is forced through the process environment")
+eq(Model.cliShell("/usr/bin/protonvpn", "signin 'me'"),
+   "PROTON_LOADER_OVERRIDES=keyring=json '/usr/bin/protonvpn' signin 'me'",
    "sign-in terminal forces the JSON keyring backend too")
+eq(Model.cliShell("/home/me/.local/bin/proton'vpn", "signin 'me'"),
+   "PROTON_LOADER_OVERRIDES=keyring=json '/home/me/.local/bin/proton'\\''vpn' signin 'me'",
+   "a quote in the resolved path cannot break out of the shell string")
+
+// ------------------------------------------------------------ state files
+// An unreadable state file must never read as "empty": the next star or
+// connection would write over whatever was actually in it.
+eq(Model.stateProblem('[{"code":"CA"}]'), "", "a good state file has no problem")
+eq(Model.stateProblem(""), "", "an empty state file is an empty list")
+eq(Model.stateProblem("   "), "", "whitespace only is an empty list")
+eq(Model.stateProblem("not json at all"), "corrupt", "a corrupt state file is flagged, not emptied")
+eq(Model.stateProblem('{"code":"CA"}'), "foreign", "a non-array state file is flagged")
+eq(Model.stateProblem("x".repeat(1048577)), "oversize", "an oversized state file is refused before parsing")
+
+const manyFavorites = JSON.stringify(
+  Array.from({ length: Model.MAX_FAVORITES + 40 }, (_, i) =>
+    ({ code: String.fromCharCode(65 + (i % 26)) + String.fromCharCode(65 + Math.floor(i / 26)), name: "x" })))
+eq(Model.normalizeFavorites(manyFavorites).length <= Model.MAX_FAVORITES, true,
+   "favorites are capped rather than rendered without limit")
 
 // ----------------------------------------------------------------- recents
 
